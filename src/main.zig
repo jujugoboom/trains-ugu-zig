@@ -20,7 +20,8 @@ const zero_vector = rl.Vector2.init(0, 0);
 const world_size_vec = rl.Vector2.init(world_size, world_size);
 const total_size_vec = rl.Vector2.init(world_size * grid_size, world_size * grid_size);
 
-var world: [world_size][world_size]u8 = [1][world_size]u8{[1]u8{blank_space} ** world_size} ** world_size;
+var world: [world_size][world_size]u8 = [1][world_size]u8{[1]u8{building} ** world_size} ** world_size;
+
 var gui_dropdown_bounds = rl.Rectangle.init(0, 0, 0, 0);
 var gui_debug_toggle_bounds = rl.Rectangle.init(0, 0, 0, 0);
 var gui_bounds = [2]*rl.Rectangle{ &gui_dropdown_bounds, &gui_debug_toggle_bounds };
@@ -58,33 +59,29 @@ fn update(camera: *rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32)
 
         camera.zoom = rl.math.clamp(camera.zoom * scale_factor, 0.125, 64.0);
 
-        const camera_target = rl.math.vector2Subtract(
-            mouse_world_pos,
-            rl.math.vector2Scale(
-                mouse_pos,
+        const camera_target = mouse_world_pos.subtract(
+            mouse_pos.scale(
                 1.0 / camera.zoom,
             ),
         );
-        const max_target = rl.math.vector2Subtract(
-            total_size_vec,
+        const max_target = total_size_vec.subtract(
             rl.Vector2.init(
                 curr_screen_width / camera.zoom,
                 curr_screen_height / camera.zoom,
             ),
         );
-        camera.target = rl.math.vector2Clamp(camera_target, zero_vector, max_target);
+        camera.target = camera_target.clamp(zero_vector, max_target);
     }
 
     if (rl.isMouseButtonDown(rl.MouseButton.mouse_button_right)) {
-        const delta = rl.math.vector2Scale(rl.getMouseDelta(), -1.0 / camera.zoom);
-        const max_target = rl.math.vector2Subtract(
-            total_size_vec,
+        const delta = rl.getMouseDelta().scale(-1.0 / camera.zoom);
+        const max_target = total_size_vec.subtract(
             rl.Vector2.init(
                 curr_screen_width / camera.zoom,
                 curr_screen_height / camera.zoom,
             ),
         );
-        camera.target = rl.math.vector2Clamp(rl.math.vector2Add(camera.target, delta), zero_vector, max_target);
+        camera.target = camera.target.add(delta).clamp(zero_vector, max_target);
     }
 
     if (rl.isMouseButtonDown(rl.MouseButton.mouse_button_left) and !checkGuiCollision(
@@ -95,8 +92,7 @@ fn update(camera: *rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32)
             rl.getMousePosition(),
             camera.*,
         );
-        const clicked = rl.math.vector2Clamp(
-            rl.math.vector2Scale(mouse_pos, inv_grid_size),
+        const clicked = mouse_pos.scale(inv_grid_size).clamp(
             zero_vector,
             world_size_vec,
         );
@@ -118,13 +114,11 @@ fn draw(camera: rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32, te
         rl.Vector2{ .x = curr_screen_width, .y = curr_screen_height },
         camera,
     );
-    const world_start = rl.math.vector2Clamp(
-        rl.math.vector2Scale(start, inv_grid_size),
+    const world_start = start.scale(inv_grid_size).clamp(
         zero_vector,
         world_size_vec,
     );
-    const world_end = rl.math.vector2Clamp(
-        rl.math.vector2Scale(end, inv_grid_size),
+    const world_end = end.scale(inv_grid_size).clamp(
         zero_vector,
         world_size_vec,
     );
@@ -198,8 +192,7 @@ fn draw(camera: rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32, te
             20,
             rl.Color.black,
         );
-        const mouse_pos = rl.math.vector2Scale(
-            rl.getMousePosition(),
+        const mouse_pos = rl.getMousePosition().scale(
             1.0 / camera.zoom,
         );
         const mouse_info = rl.textFormat("Mouse targeting %d, %d", .{
@@ -260,11 +253,4 @@ pub fn main() !void {
         try update(&camera, curr_screen_width, curr_screen_height);
         draw(camera, curr_screen_width, curr_screen_height, texture);
     }
-}
-
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
 }
