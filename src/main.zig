@@ -14,6 +14,9 @@ const rail: u8 = 1;
 const building: u8 = 2;
 const station: u8 = 3;
 
+// How many squares stations have to be apart from each other
+const station_blocking_size = 10;
+
 const toggles = "Empty;Rail;Building;Station";
 
 const zero_vector = rl.Vector2.init(0, 0);
@@ -35,12 +38,28 @@ var curr_rotation: f32 = 0.0;
 var dropdown_active = false;
 var debug_active = false;
 
+var first_l_click = true;
+
+const Building = struct {
+    x: usize,
+    y: usize,
+};
+
+const Person = struct {
+    curr_location: rl.Vector2,
+    destination: ?rl.Vector2,
+};
+
 const texture_rects = [4]rl.Rectangle{
     undefined,
     rl.Rectangle{ .x = 0, .y = 0, .width = 32, .height = 32 },
     rl.Rectangle{ .x = 32, .y = 0, .width = 32, .height = 32 },
     rl.Rectangle{ .x = 64, .y = 0, .width = 32, .height = 32 },
 };
+
+fn startSimulation() void {}
+
+fn runSimulationTick() void {}
 
 fn checkGuiCollision(point: rl.Vector2, bounds: []const *rl.Rectangle) bool {
     for (bounds) |bound| {
@@ -49,6 +68,54 @@ fn checkGuiCollision(point: rl.Vector2, bounds: []const *rl.Rectangle) bool {
         }
     }
     return false;
+}
+
+fn scaleRect(rect: rl.Rectangle, scale: f32) rl.Rectangle {
+    return rl.Rectangle.init(rect.x * scale, rect.y * scale, rect.width * scale, rect.height * scale);
+}
+
+fn getStationBlockingArea(x: i32, y: i32) rl.Rectangle {
+    const blocking_x_start = @max(@as(i32, @intCast(x)) - station_blocking_size, 0);
+    const blocking_x_end = @min(@as(i32, @intCast(x)) + station_blocking_size + 1, world_size);
+    const blocking_y_start = @max(@as(i32, @intCast(y)) - station_blocking_size, 0);
+    const blocking_y_end = @min(@as(i32, @intCast(y)) + station_blocking_size + 1, world_size);
+    return rl.Rectangle.init(@floatFromInt(blocking_x_start), @floatFromInt(blocking_y_start), @floatFromInt(blocking_x_end - blocking_x_start), @floatFromInt(blocking_y_end - blocking_y_start));
+}
+
+fn handleLeftClick(camera: rl.Camera2D) void {
+    const mouse_pos = rl.getScreenToWorld2D(
+        rl.getMousePosition(),
+        camera,
+    );
+    const clicked = mouse_pos.scale(inv_grid_size).clamp(
+        zero_vector,
+        world_size_vec,
+    );
+    if (!first_l_click) {
+        // Don't override placement when dragging
+        if (world[@intFromFloat(clicked.x)][@intFromFloat(clicked.y)] != blank_space) {
+            return;
+        }
+    }
+    if (selected_mode == station) {
+        // Ensure stations aren't placed too close
+        const blocking_rect = getStationBlockingArea(@intFromFloat(clicked.x), @intFromFloat(clicked.y));
+        const blocking_x_start = blocking_rect.x;
+        const blocking_x_end = blocking_rect.x + blocking_rect.width;
+        const blocking_y_start = blocking_rect.y;
+        const blocking_y_end = blocking_rect.y + blocking_rect.height;
+        for (@intFromFloat(blocking_x_start)..@intFromFloat(blocking_x_end)) |x| {
+            for (@intFromFloat(blocking_y_start)..@intFromFloat(blocking_y_end)) |y| {
+                if (world[x][y] == station) {
+                    return;
+                }
+            }
+        }
+    }
+    world[@intFromFloat(clicked.x)][@intFromFloat(clicked.y)] = @intCast(selected_mode);
+    world_rotation[@intFromFloat(clicked.x)][@intFromFloat(clicked.y)] = curr_rotation;
+    // Handled
+    first_l_click = false;
 }
 
 fn update(camera: *rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32) !void {
@@ -93,16 +160,9 @@ fn update(camera: *rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32)
         rl.getMousePosition(),
         &gui_bounds,
     ) and !dropdown_active) {
-        const mouse_pos = rl.getScreenToWorld2D(
-            rl.getMousePosition(),
-            camera.*,
-        );
-        const clicked = mouse_pos.scale(inv_grid_size).clamp(
-            zero_vector,
-            world_size_vec,
-        );
-        world[@intFromFloat(clicked.x)][@intFromFloat(clicked.y)] = @intCast(selected_mode);
-        world_rotation[@intFromFloat(clicked.x)][@intFromFloat(clicked.y)] = curr_rotation;
+        handleLeftClick(camera.*);
+    } else {
+        first_l_click = true;
     }
     if (rl.isKeyPressed(rl.KeyboardKey.key_r)) {
         curr_rotation += 90.0;
@@ -116,6 +176,9 @@ fn draw(camera: rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32, te
 
     rl.beginMode2D(camera);
 
+    const overscan_start = @as(f32, @floatFromInt(station_blocking_size));
+    const overscan_end = @as(f32, @floatFromInt(station_blocking_size + 1));
+
     const start = rl.getScreenToWorld2D(
         zero_vector,
         camera,
@@ -124,11 +187,11 @@ fn draw(camera: rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32, te
         rl.Vector2{ .x = curr_screen_width, .y = curr_screen_height },
         camera,
     );
-    const world_start = start.scale(inv_grid_size).clamp(
+    const world_start = start.scale(inv_grid_size).subtractValue(overscan_start).clamp(
         zero_vector,
         world_size_vec,
     );
-    const world_end = end.scale(inv_grid_size).addValue(2).clamp(
+    const world_end = end.scale(inv_grid_size).addValue(overscan_end).clamp(
         zero_vector,
         world_size_vec,
     );
@@ -140,15 +203,19 @@ fn draw(camera: rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32, te
             rl.Vector2{ .x = grid_size * fi, .y = world_size * grid_size },
             rl.Color.light_gray,
         );
+    }
+    for (@intFromFloat(world_start.y)..@intFromFloat(world_end.y)) |j| {
+        const fj = @as(f32, @floatFromInt(j));
+        rl.drawLineV(
+            rl.Vector2{ .x = 0, .y = grid_size * fj },
+            rl.Vector2{ .x = world_size * grid_size, .y = fj * grid_size },
+            rl.Color.light_gray,
+        );
+    }
+    for (@intFromFloat(world_start.x)..@intFromFloat(world_end.x)) |i| {
+        const fi = @as(f32, @floatFromInt(i));
         for (@intFromFloat(world_start.y)..@intFromFloat(world_end.y)) |j| {
             const fj = @as(f32, @floatFromInt(j));
-            if (i == @as(usize, @intFromFloat(world_start.x))) {
-                rl.drawLineV(
-                    rl.Vector2{ .x = 0, .y = grid_size * fj },
-                    rl.Vector2{ .x = world_size * grid_size, .y = fj * grid_size },
-                    rl.Color.light_gray,
-                );
-            }
             if (world[i][j] != 0) {
                 const curr_pos = world[i][j];
                 rl.drawTexturePro(
@@ -164,6 +231,14 @@ fn draw(camera: rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32, te
                     world_rotation[i][j],
                     rl.Color.white,
                 );
+                if (selected_mode == station and curr_pos == station) {
+                    // Draw blocked spaces around current stations when placing new ones
+                    const blocking_rect = getStationBlockingArea(@intCast(i), @intCast(j));
+                    rl.drawRectangleRec(
+                        scaleRect(blocking_rect, grid_size),
+                        rl.fade(rl.Color.red, 0.2),
+                    );
+                }
             }
         }
     }
@@ -174,7 +249,14 @@ fn draw(camera: rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32, te
 
     if (selected_mode != 0) {
         rl.drawRectangleRec(selected_mode_preview_bounds, rl.Color.light_gray);
-        rl.drawTexturePro(texture, texture_rects[@intCast(selected_mode)], rl.Rectangle{ .x = curr_screen_width - 79, .y = 79, .width = 128, .height = 128 }, rl.Vector2.init(64, 64), curr_rotation, rl.Color.white);
+        rl.drawTexturePro(
+            texture,
+            texture_rects[@intCast(selected_mode)],
+            rl.Rectangle{ .x = curr_screen_width - 79, .y = 79, .width = 128, .height = 128 },
+            rl.Vector2.init(64, 64),
+            curr_rotation,
+            rl.Color.white,
+        );
     }
     _ = rg.guiToggle(gui_debug_toggle_bounds, "#191#", &debug_active);
     if (debug_active) {
@@ -281,3 +363,29 @@ pub fn main() !void {
         draw(camera, curr_screen_width, curr_screen_height, texture);
     }
 }
+
+test scaleRect {
+    const zero_rect = rl.Rectangle.init(0, 0, 0, 0);
+    try std.testing.expectEqual(scaleRect(zero_rect, 10), zero_rect);
+    const one_rect = rl.Rectangle.init(1, 1, 1, 1);
+    try std.testing.expectEqual(scaleRect(one_rect, 10), rl.Rectangle.init(10, 10, 10, 10));
+    var prng = std.Random.DefaultPrng.init(0);
+    const random_rect = rl.Rectangle.init(
+        prng.random().float(f32),
+        prng.random().float(f32),
+        prng.random().float(f32),
+        prng.random().float(f32),
+    );
+    const random_scale = prng.random().float(f32);
+    try std.testing.expectEqual(
+        scaleRect(random_rect, random_scale),
+        rl.Rectangle.init(
+            random_rect.x * random_scale,
+            random_rect.y * random_scale,
+            random_rect.width * random_scale,
+            random_rect.height * random_scale,
+        ),
+    );
+}
+
+test checkGuiCollision {}
