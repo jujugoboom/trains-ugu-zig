@@ -19,14 +19,19 @@ const toggles = "Empty;Rail;Building;Station";
 const zero_vector = rl.Vector2.init(0, 0);
 const world_size_vec = rl.Vector2.init(world_size, world_size);
 const total_size_vec = rl.Vector2.init(world_size * grid_size, world_size * grid_size);
+const texture_origin = rl.Vector2.init(16, 16);
 
-var world: [world_size][world_size]u8 = [1][world_size]u8{[1]u8{building} ** world_size} ** world_size;
+var world: [world_size][world_size]u8 = [1][world_size]u8{[1]u8{0} ** world_size} ** world_size;
+var world_rotation: [world_size][world_size]f32 = [1][world_size]f32{[1]f32{0.0} ** world_size} ** world_size;
 
 var gui_dropdown_bounds = rl.Rectangle.init(0, 0, 0, 0);
 var gui_debug_toggle_bounds = rl.Rectangle.init(0, 0, 0, 0);
-var gui_bounds = [2]*rl.Rectangle{ &gui_dropdown_bounds, &gui_debug_toggle_bounds };
+var selected_mode_preview_bounds = rl.Rectangle.init(0, 0, 0, 0);
+
+var gui_bounds = [3]*rl.Rectangle{ &gui_dropdown_bounds, &gui_debug_toggle_bounds, &selected_mode_preview_bounds };
 
 var selected_mode: i32 = 0;
+var curr_rotation: f32 = 0.0;
 var dropdown_active = false;
 var debug_active = false;
 
@@ -97,6 +102,11 @@ fn update(camera: *rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32)
             world_size_vec,
         );
         world[@intFromFloat(clicked.x)][@intFromFloat(clicked.y)] = @intCast(selected_mode);
+        world_rotation[@intFromFloat(clicked.x)][@intFromFloat(clicked.y)] = curr_rotation;
+    }
+    if (rl.isKeyPressed(rl.KeyboardKey.key_r)) {
+        curr_rotation += 90.0;
+        curr_rotation = @mod(curr_rotation, 360);
     }
 }
 
@@ -118,19 +128,19 @@ fn draw(camera: rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32, te
         zero_vector,
         world_size_vec,
     );
-    const world_end = end.scale(inv_grid_size).clamp(
+    const world_end = end.scale(inv_grid_size).addValue(2).clamp(
         zero_vector,
         world_size_vec,
     );
 
-    for (@intFromFloat(world_start.x)..@intFromFloat(world_end.x + 1)) |i| {
+    for (@intFromFloat(world_start.x)..@intFromFloat(world_end.x)) |i| {
         const fi = @as(f32, @floatFromInt(i));
         rl.drawLineV(
             rl.Vector2{ .x = grid_size * fi, .y = 0 },
             rl.Vector2{ .x = grid_size * fi, .y = world_size * grid_size },
             rl.Color.light_gray,
         );
-        for (@intFromFloat(world_start.y)..@intFromFloat(world_end.y + 1)) |j| {
+        for (@intFromFloat(world_start.y)..@intFromFloat(world_end.y)) |j| {
             const fj = @as(f32, @floatFromInt(j));
             if (i == @as(usize, @intFromFloat(world_start.x))) {
                 rl.drawLineV(
@@ -141,10 +151,17 @@ fn draw(camera: rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32, te
             }
             if (world[i][j] != 0) {
                 const curr_pos = world[i][j];
-                rl.drawTextureRec(
+                rl.drawTexturePro(
                     texture,
                     texture_rects[curr_pos],
-                    rl.Vector2{ .x = fi * grid_size, .y = fj * grid_size },
+                    rl.Rectangle{
+                        .x = fi * grid_size + texture_origin.x,
+                        .y = fj * grid_size + texture_origin.y,
+                        .width = texture_rects[curr_pos].width,
+                        .height = texture_rects[curr_pos].height,
+                    },
+                    texture_origin,
+                    world_rotation[i][j],
                     rl.Color.white,
                 );
             }
@@ -155,6 +172,10 @@ fn draw(camera: rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32, te
 
     if (rg.guiDropdownBox(gui_dropdown_bounds, toggles, &selected_mode, dropdown_active) != 0) dropdown_active = !dropdown_active;
 
+    if (selected_mode != 0) {
+        rl.drawRectangleRec(selected_mode_preview_bounds, rl.Color.light_gray);
+        rl.drawTexturePro(texture, texture_rects[@intCast(selected_mode)], rl.Rectangle{ .x = curr_screen_width - 79, .y = 79, .width = 128, .height = 128 }, rl.Vector2.init(64, 64), curr_rotation, rl.Color.white);
+    }
     _ = rg.guiToggle(gui_debug_toggle_bounds, "#191#", &debug_active);
     if (debug_active) {
         const curr_screen_h_i = @as(i32, @intFromFloat(curr_screen_height));
@@ -249,6 +270,12 @@ pub fn main() !void {
             .width = 20,
             .height = 20,
         };
+
+        if (selected_mode != 0) {
+            selected_mode_preview_bounds = rl.Rectangle{ .x = curr_screen_width - 148, .y = 10, .width = 138, .height = 138 };
+        } else {
+            selected_mode_preview_bounds = rl.Rectangle{ .x = 0, .y = 0, .width = 0, .height = 0 };
+        }
 
         try update(&camera, curr_screen_width, curr_screen_height);
         draw(camera, curr_screen_width, curr_screen_height, texture);
