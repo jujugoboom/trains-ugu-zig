@@ -21,14 +21,201 @@ const world_size_vec = rl.Vector2.init(world_size, world_size);
 const total_size_vec = rl.Vector2.init(world_size * grid_size, world_size * grid_size);
 
 var world: [world_size][world_size]u8 = [1][world_size]u8{[1]u8{blank_space} ** world_size} ** world_size;
+var gui_dropdown_bounds = rl.Rectangle.init(0, 0, 0, 0);
+var gui_debug_toggle_bounds = rl.Rectangle.init(0, 0, 0, 0);
+var gui_bounds = [2]*rl.Rectangle{ &gui_dropdown_bounds, &gui_debug_toggle_bounds };
 
-pub fn checkGuiCollision(point: rl.Vector2, bounds: []const rl.Rectangle) bool {
+var selected_mode: i32 = 0;
+var dropdown_active = false;
+var debug_active = false;
+
+const texture_rects = [4]rl.Rectangle{
+    undefined,
+    rl.Rectangle{ .x = 0, .y = 0, .width = 32, .height = 32 },
+    rl.Rectangle{ .x = 32, .y = 0, .width = 32, .height = 32 },
+    rl.Rectangle{ .x = 64, .y = 0, .width = 32, .height = 32 },
+};
+
+fn checkGuiCollision(point: rl.Vector2, bounds: []const *rl.Rectangle) bool {
     for (bounds) |bound| {
-        if (rl.checkCollisionPointRec(point, bound)) {
+        if (rl.checkCollisionPointRec(point, bound.*)) {
             return true;
         }
     }
     return false;
+}
+
+fn update(camera: *rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32) !void {
+    const wheel = rl.getMouseWheelMove();
+    if (wheel != 0) {
+        const mouse_pos = rl.getMousePosition();
+        const mouse_world_pos = rl.getScreenToWorld2D(mouse_pos, camera.*);
+
+        var scale_factor = 1.0 + (0.25 * @abs(wheel));
+        if (wheel < 0) {
+            scale_factor = 1.0 / scale_factor;
+        }
+
+        camera.zoom = rl.math.clamp(camera.zoom * scale_factor, 0.125, 64.0);
+
+        const camera_target = rl.math.vector2Subtract(
+            mouse_world_pos,
+            rl.math.vector2Scale(
+                mouse_pos,
+                1.0 / camera.zoom,
+            ),
+        );
+        const max_target = rl.math.vector2Subtract(
+            total_size_vec,
+            rl.Vector2.init(
+                curr_screen_width / camera.zoom,
+                curr_screen_height / camera.zoom,
+            ),
+        );
+        camera.target = rl.math.vector2Clamp(camera_target, zero_vector, max_target);
+    }
+
+    if (rl.isMouseButtonDown(rl.MouseButton.mouse_button_right)) {
+        const delta = rl.math.vector2Scale(rl.getMouseDelta(), -1.0 / camera.zoom);
+        const max_target = rl.math.vector2Subtract(
+            total_size_vec,
+            rl.Vector2.init(
+                curr_screen_width / camera.zoom,
+                curr_screen_height / camera.zoom,
+            ),
+        );
+        camera.target = rl.math.vector2Clamp(rl.math.vector2Add(camera.target, delta), zero_vector, max_target);
+    }
+
+    if (rl.isMouseButtonDown(rl.MouseButton.mouse_button_left) and !checkGuiCollision(
+        rl.getMousePosition(),
+        &gui_bounds,
+    ) and !dropdown_active) {
+        const mouse_pos = rl.getScreenToWorld2D(
+            rl.getMousePosition(),
+            camera.*,
+        );
+        const clicked = rl.math.vector2Clamp(
+            rl.math.vector2Scale(mouse_pos, inv_grid_size),
+            zero_vector,
+            world_size_vec,
+        );
+        world[@intFromFloat(clicked.x)][@intFromFloat(clicked.y)] = @intCast(selected_mode);
+    }
+}
+
+fn draw(camera: rl.Camera2D, curr_screen_width: f32, curr_screen_height: f32, texture: rl.Texture2D) void {
+    rl.beginDrawing();
+    rl.clearBackground(rl.Color.white);
+
+    rl.beginMode2D(camera);
+
+    const start = rl.getScreenToWorld2D(
+        zero_vector,
+        camera,
+    );
+    const end = rl.getScreenToWorld2D(
+        rl.Vector2{ .x = curr_screen_width, .y = curr_screen_height },
+        camera,
+    );
+    const world_start = rl.math.vector2Clamp(
+        rl.math.vector2Scale(start, inv_grid_size),
+        zero_vector,
+        world_size_vec,
+    );
+    const world_end = rl.math.vector2Clamp(
+        rl.math.vector2Scale(end, inv_grid_size),
+        zero_vector,
+        world_size_vec,
+    );
+
+    for (@intFromFloat(world_start.x)..@intFromFloat(world_end.x + 1)) |i| {
+        const fi = @as(f32, @floatFromInt(i));
+        rl.drawLineV(
+            rl.Vector2{ .x = grid_size * fi, .y = 0 },
+            rl.Vector2{ .x = grid_size * fi, .y = world_size * grid_size },
+            rl.Color.light_gray,
+        );
+        for (@intFromFloat(world_start.y)..@intFromFloat(world_end.y + 1)) |j| {
+            const fj = @as(f32, @floatFromInt(j));
+            if (i == @as(usize, @intFromFloat(world_start.x))) {
+                rl.drawLineV(
+                    rl.Vector2{ .x = 0, .y = grid_size * fj },
+                    rl.Vector2{ .x = world_size * grid_size, .y = fj * grid_size },
+                    rl.Color.light_gray,
+                );
+            }
+            if (world[i][j] != 0) {
+                const curr_pos = world[i][j];
+                rl.drawTextureRec(
+                    texture,
+                    texture_rects[curr_pos],
+                    rl.Vector2{ .x = fi * grid_size, .y = fj * grid_size },
+                    rl.Color.white,
+                );
+            }
+        }
+    }
+
+    rl.endMode2D();
+
+    if (rg.guiDropdownBox(gui_dropdown_bounds, toggles, &selected_mode, dropdown_active) != 0) dropdown_active = !dropdown_active;
+
+    _ = rg.guiToggle(gui_debug_toggle_bounds, "#191#", &debug_active);
+    if (debug_active) {
+        const curr_screen_h_i = @as(i32, @intFromFloat(curr_screen_height));
+        const curr_screen_w_i = @as(i32, @intFromFloat(curr_screen_width));
+        const fps_text = rl.textFormat("CURRENT FPS: %i", .{rl.getFPS()});
+        rl.drawText(
+            fps_text,
+            curr_screen_w_i - (rl.measureText(fps_text, 20) + 20),
+            curr_screen_h_i - 30,
+            20,
+            rl.Color.black,
+        );
+        const render_info = rl.textFormat("Rendering from x %d to %d; y %d to %d", .{
+            @as(i32, @intFromFloat(world_start.x)),
+            @as(i32, @intFromFloat(world_end.x)),
+            @as(i32, @intFromFloat(world_start.y)),
+            @as(i32, @intFromFloat(world_end.y)),
+        });
+        rl.drawText(
+            render_info,
+            curr_screen_w_i - (rl.measureText(render_info, 20) + 20),
+            curr_screen_h_i - 60,
+            20,
+            rl.Color.black,
+        );
+
+        const position_info = rl.textFormat("Currently targeting %d, %d", .{
+            @as(i32, @intFromFloat(camera.target.x)),
+            @as(i32, @intFromFloat(camera.target.y)),
+        });
+        rl.drawText(
+            position_info,
+            curr_screen_w_i - (rl.measureText(position_info, 20) + 20),
+            curr_screen_h_i - 90,
+            20,
+            rl.Color.black,
+        );
+        const mouse_pos = rl.math.vector2Scale(
+            rl.getMousePosition(),
+            1.0 / camera.zoom,
+        );
+        const mouse_info = rl.textFormat("Mouse targeting %d, %d", .{
+            @as(i32, @intFromFloat(mouse_pos.x)),
+            @as(i32, @intFromFloat(mouse_pos.y)),
+        });
+        rl.drawText(
+            mouse_info,
+            curr_screen_w_i - (rl.measureText(mouse_info, 20) + 20),
+            curr_screen_h_i - 120,
+            20,
+            rl.Color.black,
+        );
+    }
+
+    rl.endDrawing();
 }
 
 pub fn main() !void {
@@ -46,20 +233,9 @@ pub fn main() !void {
         .zoom = 1,
     };
 
-    const texture_rects = [4]rl.Rectangle{
-        undefined,
-        rl.Rectangle{ .x = 0, .y = 0, .width = 32, .height = 32 },
-        rl.Rectangle{ .x = 32, .y = 0, .width = 32, .height = 32 },
-        rl.Rectangle{ .x = 64, .y = 0, .width = 32, .height = 32 },
-    };
-
     var texture = rl.loadTexture("resources/atlas.png");
     defer texture.unload();
     rl.genTextureMipmaps(&texture);
-
-    var selected_mode: i32 = 0;
-    var dropdown_active = false;
-    var debug_active = false;
 
     rl.setTargetFPS(1000);
 
@@ -68,191 +244,21 @@ pub fn main() !void {
         const curr_screen_height = @as(f32, @floatFromInt(rl.getScreenHeight()));
 
         // Update gui position
-        const gui_dropdown_bounds = rl.Rectangle{
+        gui_dropdown_bounds = rl.Rectangle{
             .x = @floor(curr_screen_width * 0.5) - 40,
             .y = 10,
             .width = 80,
             .height = 24,
         };
-        const gui_debug_toggle_bounds = rl.Rectangle{
+        gui_debug_toggle_bounds = rl.Rectangle{
             .x = 10,
             .y = curr_screen_height - 30,
             .width = 20,
             .height = 20,
         };
 
-        const gui_bounds = [2]rl.Rectangle{
-            gui_dropdown_bounds,
-            gui_debug_toggle_bounds,
-        };
-
-        const wheel = rl.getMouseWheelMove();
-        if (wheel != 0) {
-            const mouse_pos = rl.getMousePosition();
-            const mouse_world_pos = rl.getScreenToWorld2D(mouse_pos, camera);
-
-            var scale_factor = 1.0 + (0.25 * @abs(wheel));
-            if (wheel < 0) {
-                scale_factor = @divExact(1.0, scale_factor);
-            }
-
-            camera.zoom = rl.math.clamp(camera.zoom * scale_factor, 0.125, 64.0);
-
-            const camera_target = rl.math.vector2Subtract(
-                mouse_world_pos,
-                rl.math.vector2Scale(
-                    mouse_pos,
-                    @divExact(1.0, camera.zoom),
-                ),
-            );
-            const max_target = rl.math.vector2Subtract(
-                total_size_vec,
-                rl.Vector2.init(
-                    @divExact(curr_screen_width, camera.zoom),
-                    @divExact(curr_screen_height, camera.zoom),
-                ),
-            );
-            camera.target = rl.math.vector2Clamp(camera_target, zero_vector, max_target);
-        }
-
-        if (rl.isMouseButtonDown(rl.MouseButton.mouse_button_right)) {
-            const delta = rl.math.vector2Scale(rl.getMouseDelta(), @divExact(-1.0, camera.zoom));
-            const max_target = rl.math.vector2Subtract(
-                total_size_vec,
-                rl.Vector2.init(
-                    @divExact(curr_screen_width, camera.zoom),
-                    @divExact(curr_screen_height, camera.zoom),
-                ),
-            );
-            camera.target = rl.math.vector2Clamp(rl.math.vector2Add(camera.target, delta), zero_vector, max_target);
-        }
-
-        if (rl.isMouseButtonDown(rl.MouseButton.mouse_button_left) and !checkGuiCollision(
-            rl.getMousePosition(),
-            &gui_bounds,
-        )) {
-            const mouse_pos = rl.getScreenToWorld2D(
-                rl.getMousePosition(),
-                camera,
-            );
-            const clicked = rl.math.vector2Clamp(
-                rl.math.vector2Scale(mouse_pos, inv_grid_size),
-                zero_vector,
-                world_size_vec,
-            );
-            world[@intFromFloat(clicked.x)][@intFromFloat(clicked.y)] = @intCast(selected_mode);
-        }
-
-        rl.beginDrawing();
-        rl.clearBackground(rl.Color.white);
-
-        rl.beginMode2D(camera);
-        const start = rl.getScreenToWorld2D(
-            zero_vector,
-            camera,
-        );
-        const end = rl.getScreenToWorld2D(
-            rl.Vector2.init(curr_screen_width, curr_screen_height),
-            camera,
-        );
-        const world_start = rl.math.vector2Clamp(
-            rl.math.vector2Scale(start, inv_grid_size),
-            zero_vector,
-            world_size_vec,
-        );
-        const world_end = rl.math.vector2Clamp(
-            rl.math.vector2Scale(end, inv_grid_size),
-            zero_vector,
-            world_size_vec,
-        );
-
-        for (@intFromFloat(world_start.x)..@intFromFloat(world_end.x)) |i| {
-            const fi = @as(f32, @floatFromInt(i));
-            rl.drawLineV(
-                rl.Vector2.init(grid_size * fi, 0),
-                rl.Vector2.init(grid_size * fi, world_size * grid_size),
-                rl.Color.light_gray,
-            );
-            for (@intFromFloat(world_start.y)..@intFromFloat(world_end.y)) |j| {
-                const fj = @as(f32, @floatFromInt(j));
-                if (i == @as(usize, @intFromFloat(world_start.x))) {
-                    rl.drawLineV(
-                        rl.Vector2.init(0, grid_size * fj),
-                        rl.Vector2.init(world_size * grid_size, fj * grid_size),
-                        rl.Color.light_gray,
-                    );
-                }
-                if (world[i][j] != 0) {
-                    const curr_pos = world[i][j];
-                    rl.drawTextureRec(
-                        texture,
-                        texture_rects[curr_pos],
-                        rl.Vector2.init(fi * grid_size, fj * grid_size),
-                        rl.Color.white,
-                    );
-                }
-            }
-        }
-
-        rl.endMode2D();
-
-        if (rg.guiDropdownBox(gui_dropdown_bounds, toggles, &selected_mode, dropdown_active) != 0) dropdown_active = !dropdown_active;
-
-        _ = rg.guiToggle(gui_debug_toggle_bounds, "#191#", &debug_active);
-        if (debug_active) {
-            const curr_screen_h_i = @as(i32, @intFromFloat(curr_screen_height));
-            const curr_screen_w_i = @as(i32, @intFromFloat(curr_screen_width));
-            const fps_text = rl.textFormat("CURRENT FPS: %i", .{rl.getFPS()});
-            rl.drawText(
-                fps_text,
-                curr_screen_w_i - (rl.measureText(fps_text, 20) + 20),
-                curr_screen_h_i - 30,
-                20,
-                rl.Color.green,
-            );
-            const render_info = rl.textFormat("Rendering from x %d to %d; y %d to %d", .{
-                @as(i32, @intFromFloat(world_start.x)),
-                @as(i32, @intFromFloat(world_end.x)),
-                @as(i32, @intFromFloat(world_start.y)),
-                @as(i32, @intFromFloat(world_end.y)),
-            });
-            rl.drawText(
-                render_info,
-                curr_screen_w_i - (rl.measureText(render_info, 20) + 20),
-                curr_screen_h_i - 60,
-                20,
-                rl.Color.green,
-            );
-
-            const position_info = rl.textFormat("Currently targeting %d, %d", .{
-                @as(i32, @intFromFloat(camera.target.x)),
-                @as(i32, @intFromFloat(camera.target.y)),
-            });
-            rl.drawText(
-                position_info,
-                curr_screen_w_i - (rl.measureText(position_info, 20) + 20),
-                curr_screen_h_i - 90,
-                20,
-                rl.Color.green,
-            );
-            const mouse_pos = rl.math.vector2Scale(
-                rl.getMousePosition(),
-                @divExact(1.0, camera.zoom),
-            );
-            const mouse_info = rl.textFormat("Mouse targeting %d, %d", .{
-                @as(i32, @intFromFloat(mouse_pos.x)),
-                @as(i32, @intFromFloat(mouse_pos.y)),
-            });
-            rl.drawText(
-                mouse_info,
-                curr_screen_w_i - (rl.measureText(mouse_info, 20) + 20),
-                curr_screen_h_i - 120,
-                20,
-                rl.Color.green,
-            );
-        }
-
-        rl.endDrawing();
+        try update(&camera, curr_screen_width, curr_screen_height);
+        draw(camera, curr_screen_width, curr_screen_height, texture);
     }
 }
 
